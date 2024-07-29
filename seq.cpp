@@ -27,7 +27,7 @@ void saveDescriptorAsCSVHeader(const std::vector<int>& descriptor, const std::st
     file.close();
 }
 
-void saveDescriptorAsCSV(const float* descriptor, int descriptorSize, const std::string& filename, int label, double executionTime) {
+void saveDescriptorAsCSV(std::vector<float> descriptor, int descriptorSize, const std::string& filename, int label, double executionTime) {
     std::ofstream file(filename, std::ios::app);
     if (!file.is_open()) {
         std::cerr << "Error: Unable to open file " << filename << " for writing." << std::endl;
@@ -105,8 +105,35 @@ void computeGradients(const cv::Mat& image, std::vector<float>& magnitude, std::
     std::cerr << "Bin out of range: " << countBin << std::endl;
     std::cerr << "Histogram out of range: " << countHist << std::endl;
     std::cerr << "Histogram Pos: " << countHistPos << std::endl;
+    std::cout << "Ending computeGradients" << std::endl;
+}
 
-    // Normalization
+std::vector<float> computeDescriptors(const std::string& image_path, int& descriptorSize, int cellSize, int blockSize, int numBins, int dimofimage, int descriptorSizeDimension, double& executionTime) {
+    cv::Mat imageBeforeResize = cv::imread(image_path, cv::IMREAD_GRAYSCALE);
+    if (imageBeforeResize.empty()) {
+        std::cerr << "Failed to load image: " << image_path << std::endl;
+        descriptorSize = 0;
+        std::vector<float> descriptorArray;
+        return descriptorArray;
+    }
+
+    cv::Mat image;
+    cv::resize(imageBeforeResize, image, cv::Size(dimofimage, dimofimage)); // Resize to standard size
+    int numCellsX = image.cols / cellSize;
+    int numCellsY = image.rows / cellSize;
+    //int descriptorSizeDimension = (numCellsY - blockSize + 1) * (numCellsX - blockSize + 1) * blockSize * blockSize * numBins;
+    //descriptorSize = descriptorSizeDimension;
+
+    //float* descriptorArray = new float[descriptorSizeDimension];
+    std::vector<float> magnitude, orientation;
+    std::vector<float> histograms(numCellsX * numCellsY * numBins, 0.0f);
+    // Timing the computeGradients function
+    auto start = std::chrono::high_resolution_clock::now();
+    computeGradients(image, magnitude, orientation, histograms, cellSize, numBins);
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end - start;
+    executionTime = elapsed.count();
+        // Normalization
     for (size_t i = 0; i < histograms.size(); i += numBins) {
         float sum = 0.0f;
         for (int j = 0; j < numBins; ++j) {
@@ -117,35 +144,9 @@ void computeGradients(const cv::Mat& image, std::vector<float>& magnitude, std::
             histograms[i + j] /= (sum + 1e-6); // Small constant added to avoid division by zero
         }
     }
-    std::cout << "Ending computeGradients" << std::endl;
-}
-
-float* computeDescriptors(const std::string& image_path, int& descriptorSize, int cellSize, int blockSize, int numBins, int dimofimage, int descriptorSizeDimension, double& executionTime) {
-    cv::Mat imageBeforeResize = cv::imread(image_path, cv::IMREAD_GRAYSCALE);
-    if (imageBeforeResize.empty()) {
-        std::cerr << "Failed to load image: " << image_path << std::endl;
-        descriptorSize = 0;
-        return nullptr;
-    }
-
-    cv::Mat image;
-    cv::resize(imageBeforeResize, image, cv::Size(dimofimage, dimofimage)); // Resize to standard size
-    int numCellsX = image.cols / cellSize;
-    int numCellsY = image.rows / cellSize;
-    //int descriptorSizeDimension = (numCellsY - blockSize + 1) * (numCellsX - blockSize + 1) * blockSize * blockSize * numBins;
-    descriptorSize = descriptorSizeDimension;
-
-    float* descriptorArray = new float[descriptorSizeDimension];
-    std::vector<float> magnitude, orientation;
-    std::vector<float> histograms(numCellsX * numCellsY * numBins, 0.0f);
-    // Timing the computeGradients function
-    auto start = std::chrono::high_resolution_clock::now();
-    computeGradients(image, magnitude, orientation, histograms, cellSize, numBins);
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end - start;
-    executionTime = elapsed.count();
 
     // Block Formation and Descriptor Computation
+    std::vector<float> descriptorArray;
     int index = 0; // Index to keep track of position in the descriptor array
     for (int i = 0; i < numCellsY - blockSize + 1; ++i) {
         for (int j = 0; j < numCellsX - blockSize + 1; ++j) {
@@ -153,7 +154,8 @@ float* computeDescriptors(const std::string& image_path, int& descriptorSize, in
             for (int y = i; y < i + blockSize; ++y) {
                 for (int x = j; x < j + blockSize; ++x) {
                     for (int k = 0; k < numBins; ++k) {
-                        descriptorArray[index++] = histograms[(y * numCellsX + x) * numBins + k];
+                        //descriptorArray[index++] = histograms[(y * numCellsX + x) * numBins + k];
+                        descriptorArray.push_back(histograms[(y * numCellsX + x) * numBins + k]);
                     }
                 }
             }
@@ -193,14 +195,10 @@ int main(int argc, char** argv) {
     int label = 1; // Assuming the label is 1 for the class "People present"
     int descriptorSize = 144;
     double executionTime = 0.0;
-    float* descriptor = computeDescriptors(file_path, descriptorSize, cellSize, blockSize, numBins, dimofimage, descriptorSizeDimension, executionTime);
-    if (descriptor) {
-        std::cout << "Dimension descriptor: " << descriptorSize << std::endl;
-        saveDescriptorAsCSV(descriptor, descriptorSize, outputFile, label, executionTime);
-        delete[] descriptor; // Don't forget to deallocate memory
-    } else {
-        std::cerr << "Failed to compute descriptors for image: " << file_path << std::endl;
-    }
+    std::vector<float> descriptor = computeDescriptors(file_path, descriptorSize, cellSize, blockSize, numBins, dimofimage, descriptorSizeDimension, executionTime);
+    std::cout << "Dimension descriptor: " << descriptorSize << std::endl;
+    saveDescriptorAsCSV(descriptor, descriptorSize, outputFile, label, executionTime);
+    descriptor.clear(); // Don't forget to deallocate memory
 
     return 0;
 }
