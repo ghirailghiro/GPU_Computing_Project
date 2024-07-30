@@ -23,12 +23,12 @@ void saveDescriptorAsCSVHeader(const std::vector<int>& descriptor, const std::st
             file << ",";
         }
     }
-    file << "," << label << "\n";
+    file << "," << label <<","<< "Exec Time" << "\n";
     file.close();
 }
 
 
-void saveDescriptorAsCSV(const std::vector<float>& descriptor, const std::string& filename, int label) {
+void saveDescriptorAsCSV(const std::vector<float>& descriptor, const std::string& filename, int label,  double executionTime) {
     std::ofstream file(filename, std::ios::app);
     if (!file.is_open()) {
         std::cerr << "Error: Unable to open file " << filename << " for writing." << std::endl;
@@ -42,7 +42,7 @@ void saveDescriptorAsCSV(const std::vector<float>& descriptor, const std::string
             file << ",";
         }
     }
-    file << "," << label << "\n";
+    file << "," << label << "," << executionTime << "\n";
     file.close();
 }
 
@@ -84,7 +84,7 @@ __global__ void computeGradients(unsigned char* image, float *d_magnitude, float
 std::vector<float> computeDescriptors(const std::string& image_path, double& executionTime){
         // Example: Load an image using OpenCV
     cv::Mat imageBeforeResize = cv::imread(image_path, cv::IMREAD_GRAYSCALE);
-    cv::Mat image;
+    cv::Mat image;  
     cv::resize(imageBeforeResize, image, cv::Size(224, 224)); // Resize to standard size
     if(image.empty()) {
         std::cerr << "Failed to load image." << std::endl;
@@ -201,7 +201,7 @@ std::vector<float> computeDescriptors(const std::string& image_path, double& exe
     return descriptor;
 }
 
-int main() {
+int main(int argc, char** argv) {
      if (argc != 6) {
         std::cerr << "Usage: " << argv[0] << " <cellSize> <blockSize> <numBins> <outputFile> <dimofimage>" << std::endl;
         return 1;
@@ -228,8 +228,8 @@ int main() {
         std::string file_path = entry.path().string();
         std::cout << "Processing image: " << file_path << std::endl;
 
-
-        std::vector<float> descriptor = computeDescriptors(file_path);
+        double executionTime = 0.0;
+        std::vector<float> descriptor = computeDescriptors(file_path, executionTime);
         if (descriptor.empty()) {
             std::cout << "Vector is empty" << std::endl;
         } else {
@@ -238,7 +238,7 @@ int main() {
             int length = static_cast<int>(descriptor.size());
             std::cout << "Dimension of descriptor: " << length << std::endl;
             descriptor1.push_back(length);
-            saveDescriptorAsCSV(descriptor, "descriptor.csv", label);
+            saveDescriptorAsCSV(descriptor, "descriptor.csv", label, executionTime);
             descriptor.clear(); // Clear the vector
             descriptor1.clear();
         }
@@ -250,8 +250,8 @@ int main() {
         std::string file_path = entry.path().string();
         std::cout << "Processing image: " << file_path << std::endl;
 
-
-        std::vector<float> descriptor = computeDescriptors(file_path);
+        double executionTime = 0.0;
+        std::vector<float> descriptor = computeDescriptors(file_path, executionTime);
         if (descriptor.empty()) {
             std::cout << "Vector is empty" << std::endl;
         } else {
@@ -260,7 +260,7 @@ int main() {
             int length = static_cast<int>(descriptor.size());
             std::cout << "Dimension of descriptor: " << length << std::endl;
             descriptor1.push_back(length);
-            saveDescriptorAsCSV(descriptor, "descriptor.csv", label);
+            saveDescriptorAsCSV(descriptor, "descriptor.csv", label, executionTime);
             descriptor.clear(); // Clear the vector
             descriptor1.clear();
         }

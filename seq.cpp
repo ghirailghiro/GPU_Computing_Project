@@ -190,15 +190,34 @@ int main(int argc, char** argv) {
     header.clear();
 
     // People present class
-    std::string file_path = "human detection dataset/1/0.png";
-    std::cout << "Processing image: " << file_path << std::endl;
-    int label = 1; // Assuming the label is 1 for the class "People present"
-    int descriptorSize = 144;
-    double executionTime = 0.0;
-    std::vector<float> descriptor = computeDescriptors(file_path, descriptorSize, cellSize, blockSize, numBins, dimofimage, descriptorSizeDimension, executionTime);
-    std::cout << "Dimension descriptor: " << descriptorSize << std::endl;
-    saveDescriptorAsCSV(descriptor, descriptorSize, outputFile, label, executionTime);
-    descriptor.clear(); // Don't forget to deallocate memory
+    //Not people present class
+    folder_path = "human detection dataset/1";
+    for (const auto& entry : fs::directory_iterator(folder_path)) {
+        std::string file_path = entry.path().string();
+        std::cout << "Processing image: " << file_path << std::endl;
+        int label = 1; // Assuming the label is 1 for the class "People present"
+        int descriptorSize = 144;
+        double executionTime = 0.0;
+        std::vector<float> descriptor = computeDescriptors(file_path, descriptorSize, cellSize, blockSize, numBins, dimofimage, descriptorSizeDimension, executionTime);
+        std::cout << "Dimension descriptor: " << descriptorSize << std::endl;
+        saveDescriptorAsCSV(descriptor, descriptorSize, outputFile, label, executionTime);
+        descriptor.clear(); // Don't forget to deallocate memory
+    }
+
+    // People present class
+    //Not people present class
+    folder_path = "human detection dataset/0";
+    for (const auto& entry : fs::directory_iterator(folder_path)) {
+        std::string file_path = entry.path().string();
+        std::cout << "Processing image: " << file_path << std::endl;
+        int label = 0; // Assuming the label is 1 for the class "People present"
+        int descriptorSize = 144;
+        double executionTime = 0.0;
+        std::vector<float> descriptor = computeDescriptors(file_path, descriptorSize, cellSize, blockSize, numBins, dimofimage, descriptorSizeDimension, executionTime);
+        std::cout << "Dimension descriptor: " << descriptorSize << std::endl;
+        saveDescriptorAsCSV(descriptor, descriptorSize, outputFile, label, executionTime);
+        descriptor.clear(); // Don't forget to deallocate memory
+    }
 
     return 0;
 }
