@@ -23,7 +23,7 @@ void saveDescriptorAsCSVHeader(const std::vector<int>& descriptor, const std::st
             file << ",";
         }
     }
-    file << "," << label <<","<< "Exec Time" << "\n";
+    file << "," << "label" <<","<< "Exec Time" << "\n";
     file.close();
 }
 
