@@ -109,12 +109,12 @@ __global__ void computeGradients(unsigned char* image, float *d_magnitude, float
     //The conditional statements check if the current pixel is within the image boundaries.
     //If the pixel is not on the left or right edge of the image, the gradient in the x-direction is computed by subtracting the pixel value on the left from the pixel value on the right.
     if (idx > 0 && idx < width - 1) {
-        G_x = (float)image[idy * width + (idx + 1)] - (float)image[idy * width + (idx - 1)];
+        G_x = (float)image[indexCurrent + 1] - (float)image[indexCurrent - 1];
     }
 
     float G_y = 0;
     if (idy > 0 && idy < height - 1) {
-        G_y = (float)image[(idy + 1) * width + idx] - (float)image[(idy - 1) * width + idx];
+        G_y = (float)image[(idy + 1) * width + idx] - (float)image[(idy - 1) * width + idx]; // To Do: Capire formula??
     }
 
     d_magnitude[indexCurrent] = sqrtf(G_x * G_x + G_y * G_y);
@@ -130,7 +130,7 @@ __global__ void computeGradients(unsigned char* image, float *d_magnitude, float
     //This addition determines the absolute position of a cell within the grid, considering both its X and Y coordinates.
     int histIndex = cellY * (width / cellSize) + cellX;
     int numBins = 9; // Assuming 9 orientation bins
-    float binWidth = M_PI / numBins;
+    float binWidth = M_PI / numBins; // TODO: Parametrizzare perchè da fare una volta sola
     //The following formula calculates the bin index for the current orientation value:
     /*1. `d_orientation[indexCurrent]`: This is a variable or an array element that holds the orientation value at the `indexCurrent` position. 
         The orientation value is likely in radians.
@@ -176,7 +176,7 @@ std::vector<float> computeDescriptorsCUDA(const cv::Mat& image, double& executio
         fprintf(stderr, "cudaMemset failed: %s\n", cudaGetErrorString(status));
         exit(EXIT_FAILURE);
     }
-    sizeInBytes = image.total() * sizeof(float);
+    //sizeInBytes = image.total() * sizeof(float);
     float* d_orientation;
     status = cudaMalloc((void **)&d_orientation, sizeInBytes);
     // Allocate memory for orientation
@@ -193,22 +193,23 @@ std::vector<float> computeDescriptorsCUDA(const cv::Mat& image, double& executio
         exit(EXIT_FAILURE);
     }
 
-    // Assuming image dimensions are reasonable a blocksize 16x16
+    // Assuming image dimensions are reasonable for a blocksize 16x16
     //By dividing the image dimensions by the block size and rounding up to the nearest integer, the grid size is determined. 
     //The -1 in the calculation is used to handle cases where the image dimensions are not evenly divisible by the block size. 
     //This ensures that any remaining pixels are included in the grid.
     dim3 blockSize(16, 16);
     dim3 gridSize((image.cols + blockSize.x - 1) / blockSize.x,
                   (image.rows + blockSize.y - 1) / blockSize.y);
-
+    //TODO: Print gridsize.x and gridsize.y;
+    
     // Allocate memory for histograms
-    int cellSize = 64;
-    int numCellsX = image.cols / cellSize;
+    int cellSize = 64; // TODO: Parametrizzare
+    int numCellsX = image.cols / cellSize; 
     int numCellsY = image.rows / cellSize;
 
     // hist size is the number of cells in the x and y direction times 9 bins per cell
-    size_t histSize = numCellsX * numCellsY * 9 * sizeof(float);
-    float* d_histograms;
+    size_t histSize = numCellsX * numCellsY * 9 * sizeof(float); //TODO: Parametrizzare il num di bin
+    float* d_histograms; //device histograms 
     // Allocate memory for histograms
     status = cudaMalloc((void **)&d_histograms, histSize);
     if (status != cudaSuccess) {
@@ -235,15 +236,15 @@ std::vector<float> computeDescriptorsCUDA(const cv::Mat& image, double& executio
     // Transfer histogram data from device to host
     float* h_histograms = new float[numCellsX * numCellsY * 9];
     cudaMemcpy(h_histograms, d_histograms, histSize, cudaMemcpyDeviceToHost);
-    // Normalization of histograms using the sum of squares
+    // Normalization of histograms using the sum of squares with L2-norm per cell - TODO : modify and do it per block
     for (int i = 0; i < numCellsX * numCellsY; ++i) {
         float sum = 0.0f;
         for (int j = 0; j < 9; ++j) {
             sum += h_histograms[i * 9 + j] * h_histograms[i * 9 + j];
         }
-        sum = sqrtf(sum);
+        sum = sqrtf(sum); // norm 2 ->  ||v||2 = sqrt(sum(x^2)) where x are the elements of vector v
         for (int j = 0; j < 9; ++j) {
-            h_histograms[i * 9 + j] /= (sum + 1e-6); // Small constant added to avoid division by zero
+            h_histograms[i * 9 + j] /= sqrtf((sum*sum) + (1e-6*1e-6)); // Small constant added to avoid division by zero
         }
     }
 
@@ -317,10 +318,10 @@ std::vector<float> computeDescriptorsSeq(const cv::Mat& image, double& execution
 }
 
 std::vector<float> computeDescriptors(const std::string& image_path, double& executionTime, bool cudaAccelerated = true) {
-    // Example: Load an image using OpenCV
+    // Load an image using OpenCV
     cv::Mat imageBeforeResize = cv::imread(image_path, cv::IMREAD_GRAYSCALE);
     cv::Mat image;
-    cv::resize(imageBeforeResize, image, cv::Size(224, 224)); // Resize to standard size
+    cv::resize(imageBeforeResize, image, cv::Size(224, 224)); // Resize to standard size -- TODO: Refactor
     if(image.empty()) {
         std::cerr << "Failed to load image." << std::endl;
         return std::vector<float>();
