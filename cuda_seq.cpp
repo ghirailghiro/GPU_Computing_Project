@@ -132,9 +132,11 @@ __global__ void computeGradients(unsigned char* image, float *d_magnitude, float
     int numBins = 9; // Assuming 9 orientation bins
     float binWidth = M_PI / numBins;
     //The following formula calculates the bin index for the current orientation value:
-    /*1. `d_orientation[indexCurrent]`: This is a variable or an array element that holds the orientation value at the `indexCurrent` position. The orientation value is likely in radians.
+    /*1. `d_orientation[indexCurrent]`: This is a variable or an array element that holds the orientation value at the `indexCurrent` position. 
+        The orientation value is likely in radians.
 
-    2. `M_PI`: This is a constant defined in the C++ math library that represents the value of pi (π). It is used to shift the orientation value by π radians.
+    2. `M_PI`: This is a constant defined in the C++ math library that represents the value of pi (π). 
+        It is used to shift the orientation value by π radians.
 
     3. `(d_orientation[indexCurrent] + M_PI)`: This expression adds the orientation value to π, effectively shifting the range of values from [-π, π] to [0, 2π].
 
@@ -374,7 +376,7 @@ int main(int argc, char** argv) {
     saveDescriptorAsCSVHeader(header, "descriptor_seq.csv", "label");
     saveDescriptorAsCSVHeader(header, "descriptor_cuda.csv", "label");
     header.clear();
-    //People present class
+    //Iterate on images where a human is present
     for (const auto& entry : fs::directory_iterator(folder_path)) {
         std::string file_path = entry.path().string();
         std::cout << "Processing image: " << file_path << std::endl;
@@ -394,7 +396,7 @@ int main(int argc, char** argv) {
         }
     }
 
-      //Not people present class
+      //Iterate on images where a human is NOT present
       folder_path = "/content/drive/My Drive/GPU Computing/human detection dataset/0";
       for (const auto& entry : fs::directory_iterator(folder_path)) {
         std::string file_path = entry.path().string();
