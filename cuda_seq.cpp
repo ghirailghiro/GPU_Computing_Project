@@ -347,12 +347,22 @@ int main(int argc, char** argv) {
     // Calcute numbers of cells in x and y direction
     int numCellsX = dimofimage / cellSize;
     int numCellsY = dimofimage / cellSize;
-    /*This is how we calculate the descriptorSizeDimension :
-    1. `(numCellsY - blockSize + 1)` calculates the number of blocks in the Y direction. Here, `numCellsY` represents the total number of cells in the Y direction, and `blockSize` represents the size of each block. By subtracting `blockSize - 1` from `numCellsY`, we account for the overlapping blocks.
-    2. `(numCellsX - blockSize + 1)` calculates the number of blocks in the X direction. Similar to the previous step, `numCellsX` represents the total number of cells in the X direction, and `blockSize` represents the size of each block. Again, we subtract `blockSize - 1` to account for the overlapping blocks.
-    3. `blockSize * blockSize` calculates the number of cells within each block. Since the blocks are square, we multiply the `blockSize` by itself to get the total number of cells in a block.
+    /*This is how we calculate the descriptorSizeDimension:
+    
+    1. `(numCellsY - blockSize + 1)` calculates the number of blocks in the Y direction. 
+        Here, `numCellsY` represents the total number of cells in the Y direction, and `blockSize` represents the size of each block.
+        By subtracting `blockSize - 1` from `numCellsY`, we account for the overlapping blocks.
+        
+    2. `(numCellsX - blockSize + 1)` calculates the number of blocks in the X direction. 
+        Similar to the previous step, `numCellsX` represents the total number of cells in the X direction, and `blockSize` represents the size of each block. 
+        Again, we subtract `blockSize - 1` to account for the overlapping blocks.
+        
+    3. `blockSize * blockSize` calculates the number of cells within each block. 
+        Since the blocks are square, we multiply the `blockSize` by itself to get the total number of cells in a block.
+        
     4. `numBins` represents the number of bins used for the descriptor. Each cell in the histogram contains `numBins` values.
-    By multiplying all these values together, we get the total size of the descriptor. The descriptor size is the product of the number of blocks in the X and Y directions, the number of cells within each block, and the number of bins.
+        By multiplying all these values together, we get the total size of the descriptor. 
+        The descriptor size is the product of the number of blocks in the X and Y directions, the number of cells within each block, and the number of bins.
     */
     int descriptorSizeDimension = (numCellsY - blockSize + 1) * (numCellsX - blockSize + 1) * blockSize * blockSize * numBins;
 
