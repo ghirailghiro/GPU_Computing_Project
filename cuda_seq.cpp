@@ -9,6 +9,15 @@
 
 namespace fs = std::filesystem;
 
+// Global variables
+int cellSize_g;
+int blockSize_g;
+int descriptorSizeDimension_g;
+int numBins_g;
+int dimofimage_g;
+
+
+
 void saveDescriptorAsCSVHeader(const std::vector<int>& descriptor, const std::string& filename, const std::string& label) {
     std::ofstream file(filename, std::ios::app);
     if (!file.is_open()) {
@@ -97,7 +106,7 @@ void computeGradients_seq(const cv::Mat& image, std::vector<float>& magnitude, s
     std::cout << "Ending computeGradients" << std::endl;
 }
 
-__global__ void computeGradients(unsigned char* image, float *d_magnitude, float *d_orientation, float *d_histograms, int width, int height, int cellSize) {
+__global__ void computeGradients(unsigned char* image, float *d_magnitude, float *d_orientation, float *d_histograms, int width, int height, int cellSize,float binWidth, int numBins) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int idy = blockIdx.y * blockDim.y + threadIdx.y;
     int indexCurrent = idy * width + idx;
@@ -117,8 +126,8 @@ __global__ void computeGradients(unsigned char* image, float *d_magnitude, float
         G_y = (float)image[(idy + 1) * width + idx] - (float)image[(idy - 1) * width + idx]; // To Do: Capire formula??
     }
 
-    d_magnitude[indexCurrent] = sqrtf(G_x * G_x + G_y * G_y);
-    d_orientation[indexCurrent] = atan2f(G_y, G_x);
+    float d_magnitude_var = sqrtf(G_x * G_x + G_y * G_y);
+    float d_orientation_var = atan2f(G_y, G_x);
 
     // Compute histogram bin for the current gradient
     int cellX = idx / cellSize;
@@ -129,8 +138,7 @@ __global__ void computeGradients(unsigned char* image, float *d_magnitude, float
     //Finally, the expression cellY * (width / cellSize) + cellX adds the X-coordinate cellX to the previously calculated value. 
     //This addition determines the absolute position of a cell within the grid, considering both its X and Y coordinates.
     int histIndex = cellY * (width / cellSize) + cellX;
-    int numBins = 9; // Assuming 9 orientation bins
-    float binWidth = M_PI / numBins; // TODO: Parametrizzare perchè da fare una volta sola
+    // TODO: Parametrizzare perchè da fare una volta sola
     //The following formula calculates the bin index for the current orientation value:
     /*1. `d_orientation[indexCurrent]`: This is a variable or an array element that holds the orientation value at the `indexCurrent` position. 
         The orientation value is likely in radians.
@@ -149,10 +157,10 @@ __global__ void computeGradients(unsigned char* image, float *d_magnitude, float
     Overall, this code snippet calculates the bin index for a given orientation value by shifting the range of values, dividing by the bin width, and rounding down to the nearest integer. 
     The bin index is commonly used in histogram calculations or other applications where values need to be grouped into bins or categories.
     */
-    int bin = floor((d_orientation[indexCurrent] + M_PI) / binWidth);
+    int bin = floor((d_orientation_var + M_PI) / binWidth);
     if (bin == numBins) bin = 0; // Wrap around
 
-    atomicAdd(&d_histograms[histIndex * numBins + bin], d_magnitude[indexCurrent]);
+    atomicAdd(&d_histograms[histIndex * numBins + bin], d_magnitude_var);
 }
 
 std::vector<float> computeDescriptorsCUDA(const cv::Mat& image, double& executionTime) {
@@ -202,13 +210,11 @@ std::vector<float> computeDescriptorsCUDA(const cv::Mat& image, double& executio
                   (image.rows + blockSize.y - 1) / blockSize.y);
     //TODO: Print gridsize.x and gridsize.y;
     
-    // Allocate memory for histograms
-    int cellSize = 64; // TODO: Parametrizzare
-    int numCellsX = image.cols / cellSize; 
-    int numCellsY = image.rows / cellSize;
+    int numCellsX = image.cols / cellSize_g; 
+    int numCellsY = image.rows / cellSize_g;
 
     // hist size is the number of cells in the x and y direction times 9 bins per cell
-    size_t histSize = numCellsX * numCellsY * 9 * sizeof(float); //TODO: Parametrizzare il num di bin
+    size_t histSize = numCellsX * numCellsY * numBins_g * sizeof(float); //TODO: Parametrizzare il num di bin
     float* d_histograms; //device histograms 
     // Allocate memory for histograms
     status = cudaMalloc((void **)&d_histograms, histSize);
@@ -225,26 +231,28 @@ std::vector<float> computeDescriptorsCUDA(const cv::Mat& image, double& executio
         exit(EXIT_FAILURE);
     }
 
+    float binWidth = M_PI / numBins_g;
+
     auto start = std::chrono::high_resolution_clock::now();
     // Launch the kernel
-    computeGradients<<<gridSize, blockSize>>>(d_image, d_magnitude, d_orientation, d_histograms, image.cols, image.rows, cellSize);
+    computeGradients<<<gridSize, blockSize>>>(d_image, d_magnitude, d_orientation, d_histograms, image.cols, image.rows, cellSize_g, binWidth, numBins_g);
     cudaDeviceSynchronize();
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end - start;
     executionTime = elapsed.count();
 
     // Transfer histogram data from device to host
-    float* h_histograms = new float[numCellsX * numCellsY * 9];
+    float* h_histograms = new float[numCellsX * numCellsY * numBins_g];
     cudaMemcpy(h_histograms, d_histograms, histSize, cudaMemcpyDeviceToHost);
     // Normalization of histograms using the sum of squares with L2-norm per cell - TODO : modify and do it per block
     for (int i = 0; i < numCellsX * numCellsY; ++i) {
         float sum = 0.0f;
-        for (int j = 0; j < 9; ++j) {
-            sum += h_histograms[i * 9 + j] * h_histograms[i * 9 + j];
+        for (int j = 0; j < numBins_g; ++j) {
+            sum += h_histograms[i * numBins_g + j] * h_histograms[i * numBins_g + j];
         }
         sum = sqrtf(sum); // norm 2 ->  ||v||2 = sqrt(sum(x^2)) where x are the elements of vector v
-        for (int j = 0; j < 9; ++j) {
-            h_histograms[i * 9 + j] /= sqrtf((sum*sum) + (1e-6*1e-6)); // Small constant added to avoid division by zero
+        for (int j = 0; j < numBins_g; ++j) {
+            h_histograms[i * numBins_g + j] /= sqrtf((sum*sum) + (1e-6*1e-6)); // Small constant added to avoid division by zero
         }
     }
 
@@ -253,15 +261,43 @@ std::vector<float> computeDescriptorsCUDA(const cv::Mat& image, double& executio
     for (int i = 0; i < numCellsY - 1; ++i) {
         for (int j = 0; j < numCellsX - 1; ++j) {
             // Concatenate histograms of four cells into a block
-            for (int y = i; y < i + 2; ++y) {
-                for (int x = j; x < j + 2; ++x) {
-                    for (int k = 0; k < 9; ++k) {
-                        descriptor.push_back(h_histograms[(y * numCellsX + x) * 9 + k]);
+            for (int y = i; y < i + 3; ++y) {
+                for (int x = j; x < j + 3; ++x) {
+                    for (int k = 0; k < numBins_g; ++k) {
+                        descriptor.push_back(h_histograms[(y * numCellsX + x) * numBins_g + k]);
                     }
                 }
             }
         }
     }
+
+    // Block Formation and Descriptor Computation with Block-Level Normalization
+    /*std::vector<float> descriptor;
+    for (int i = 0; i < numCellsY - 1; ++i) {
+        for (int j = 0; j < numCellsX - 1; ++j) {
+            // Step 1: Calculate the L2-norm for the block
+            float blockNorm = 0.0f;
+            for (int y = i; y < i + blockSize_g; ++y) {
+                for (int x = j; x < j + blockSize_g; ++x) {
+                    for (int k = 0; k < numBins_g; ++k) {
+                        float histValue = h_histograms[(y * numCellsX + x) * numBins_g + k];
+                        blockNorm += histValue * histValue;
+                    }
+                }
+            }
+            blockNorm = sqrtf((blockNorm*blockNorm) + 1e-6 * 1e-6); // Small constant to avoid division by zero
+
+            // Step 2: Normalize the histograms within the block
+            for (int y = i; y < i + blockSize_g; ++y) {
+                for (int x = j; x < j + blockSize_g; ++x) {
+                    for (int k = 0; k < numBins_g; ++k) {
+                        float normalizedValue = h_histograms[(y * numCellsX + x) * numBins_g + k] / blockNorm;
+                        descriptor.push_back(normalizedValue);
+                    }
+                }
+            }
+        }
+    }*/
 
     cudaFree(d_image);
     cudaFree(d_magnitude);
@@ -321,7 +357,7 @@ std::vector<float> computeDescriptors(const std::string& image_path, double& exe
     // Load an image using OpenCV
     cv::Mat imageBeforeResize = cv::imread(image_path, cv::IMREAD_GRAYSCALE);
     cv::Mat image;
-    cv::resize(imageBeforeResize, image, cv::Size(224, 224)); // Resize to standard size -- TODO: Refactor
+    cv::resize(imageBeforeResize, image, cv::Size(dimofimage_g, dimofimage_g)); // Resize to standard size -- TODO: Refactor
     if(image.empty()) {
         std::cerr << "Failed to load image." << std::endl;
         return std::vector<float>();
@@ -342,14 +378,15 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    int cellSize = std::stoi(argv[1]);
-    int blockSize = std::stoi(argv[2]);
-    int numBins = std::stoi(argv[3]);
+    cellSize_g = std::stoi(argv[1]);
+    blockSize_g = std::stoi(argv[2]);
+    numBins_g = std::stoi(argv[3]);
     std::string outputFile = argv[4];
-    int dimofimage = std::stoi(argv[5]);//224
+    dimofimage_g = std::stoi(argv[5]);//224
+
     // Calcute numbers of cells in x and y direction
-    int numCellsX = dimofimage / cellSize;
-    int numCellsY = dimofimage / cellSize;
+    int numCellsX = dimofimage_g / cellSize_g;
+    int numCellsY = dimofimage_g / cellSize_g;
     /*This is how we calculate the descriptorSizeDimension:
     
     1. `(numCellsY - blockSize + 1)` calculates the number of blocks in the Y direction. 
@@ -367,15 +404,19 @@ int main(int argc, char** argv) {
         By multiplying all these values together, we get the total size of the descriptor. 
         The descriptor size is the product of the number of blocks in the X and Y directions, the number of cells within each block, and the number of bins.
     */
-    int descriptorSizeDimension = (numCellsY - blockSize + 1) * (numCellsX - blockSize + 1) * blockSize * blockSize * numBins;
+    descriptorSizeDimension_g = (numCellsY - blockSize_g + 1) * (numCellsX - blockSize_g + 1) * blockSize_g * blockSize_g * numBins_g;
 
     std::string folder_path = "/content/drive/My Drive/GPU Computing/human detection dataset/1"; // Change this to your folder path
     std::vector<int> header;
-    for (int i=1; i <= descriptorSizeDimension; ++i){
+    for (int i=1; i <= descriptorSizeDimension_g; ++i){
       header.push_back(i);
     }
-    saveDescriptorAsCSVHeader(header, "descriptor_seq.csv", "label");
-    saveDescriptorAsCSVHeader(header, "descriptor_cuda.csv", "label");
+    std::string seq_file = outputFile+"_seq.csv";
+    std::string cuda_file = outputFile+"_cuda.csv";
+    std::cout << seq_file << std::endl;
+    std::cout << cuda_file << std::endl;
+    saveDescriptorAsCSVHeader(header, seq_file, "label");
+    saveDescriptorAsCSVHeader(header, cuda_file, "label");
     header.clear();
     //Iterate on images where a human is present
     for (const auto& entry : fs::directory_iterator(folder_path)) {
@@ -385,15 +426,18 @@ int main(int argc, char** argv) {
         double executionTimeCuda = 0.0;
         double executionTimeSeq = 0.0;
         std::vector<float> descriptor = computeDescriptors(file_path, executionTimeCuda);
-        std::vector<float> descriptor_seq = computeDescriptors(file_path, executionTimeSeq, false);
-        if (descriptor.empty() || descriptor_seq.empty()) {
+        //std::vector<float> descriptor_seq = computeDescriptors(file_path, executionTimeSeq, false);
+        if (descriptor.empty()){ //|| descriptor_seq.empty()) {
             std::cout << "Vector is empty" << std::endl;
         } else {
             int label = 1;
-            saveDescriptorAsCSV(descriptor, "descriptor_cuda.csv", label, executionTimeCuda);
-            saveDescriptorAsCSV(descriptor_seq, "descriptor_seq.csv", label, executionTimeSeq);
+            std::cout << descriptor.size() << std::endl;
+            std::cout << descriptor[0] << std::endl;
+            saveDescriptorAsCSV(descriptor, cuda_file, label, executionTimeCuda);
+            //saveDescriptorAsCSV(descriptor_seq, seq_file, label, executionTimeSeq);
             descriptor.clear(); // Clear the vector
-            descriptor_seq.clear();
+            //descriptor_seq.clear();
+            break;
         }
     }
 
@@ -406,15 +450,16 @@ int main(int argc, char** argv) {
         double executionTimeCuda = 0.0;
         double executionTimeSeq = 0.0;
         std::vector<float> descriptor = computeDescriptors(file_path, executionTimeCuda);
-        std::vector<float> descriptor_seq = computeDescriptors(file_path, executionTimeSeq, false);
-        if (descriptor.empty() || descriptor_seq.empty()) {
+        //std::vector<float> descriptor_seq = computeDescriptors(file_path, executionTimeSeq, false);
+        if (descriptor.empty()){ //|| descriptor_seq.empty()) {
             std::cout << "Vector is empty" << std::endl;
         } else {
-            int label = 1;
-            saveDescriptorAsCSV(descriptor, "descriptor_cuda.csv", label, executionTimeCuda);
-            saveDescriptorAsCSV(descriptor_seq, "descriptor_seq.csv", label, executionTimeSeq);
+            int label = 0;
+            saveDescriptorAsCSV(descriptor, cuda_file, label, executionTimeCuda);
+            //saveDescriptorAsCSV(descriptor_seq, seq_file, label, executionTimeSeq);
             descriptor.clear(); // Clear the vector
-            descriptor_seq.clear();
+            //descriptor_seq.clear();
+            break;
         }
     }
 
