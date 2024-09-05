@@ -18,6 +18,23 @@ The entire project, including both sequential and CUDA implementations, is execu
 ### C++ Implementation
 Just the C++ code for both the sequential and CUDA implementations can be found in the file **`cuda_seq.cpp`**. This file contains the detailed logic used to compute HOG descriptors, leveraging CUDA for parallel processing.
 
+### Running Experiments
+
+The **`exp.sh`** file is a shell script designed to run all the experiments related to the project. It automates the process of testing both the CUDA and sequential implementations across different image dimensions and configurations.
+
+By running **`exp.sh`**, you can:
+- Execute the sequential and CUDA HOG descriptor computations.
+- Measure execution time and memory usage for different image sizes (64x64, 128x128, and 256x256).
+- Collect results for performance comparison.
+
+To run the experiments, simply execute the script in your terminal:
+
+```bash
+./exp.sh
+```
+
+This script ensures that all experiments are conducted in a streamlined manner, allowing for easy replication and analysis of the results.
+
 ### Contributors
 This project was developed by:
 - **Celeste Nicora**
