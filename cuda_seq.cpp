@@ -1,4 +1,3 @@
-%%writefile gradient_computation.cu
 #include <opencv2/opencv.hpp>
 #include <fstream>
 #include <sstream>
@@ -6,6 +5,7 @@
 #include <vector>
 #include <filesystem>
 #include <chrono>
+#include <tuple>
 
 namespace fs = std::filesystem;
 
@@ -16,6 +16,45 @@ int descriptorSizeDimension_g;
 int numBins_g;
 int dimofimage_g;
 
+std::vector<std::tuple<std::string, std::string, double, double, double>> memoryUsageLog;
+
+std::string current_filename_g;
+
+void logMemoryUsage(const std::string& label) {
+    size_t free_memory, total_memory;
+    cudaMemGetInfo(&free_memory, &total_memory);
+    size_t used_memory = total_memory - free_memory;
+
+    double usedMemoryMB = used_memory / (1024.0 * 1024.0);
+    double freeMemoryMB = free_memory / (1024.0 * 1024.0);
+    double totalMemoryMB = total_memory / (1024.0 * 1024.0);
+
+    memoryUsageLog.push_back(std::make_tuple(current_filename_g, label, usedMemoryMB, freeMemoryMB, totalMemoryMB));
+}
+
+
+void saveMemoryUsageLogToCSV(const std::string& filename) {
+    std::ofstream file(filename);
+
+    if (!file.is_open()) {
+        std::cerr << "Error: Unable to open file " << filename << " for writing." << std::endl;
+        return;
+    }
+
+    // Write CSV header
+    file << "filename,Label,Used Memory (MB),Free Memory (MB),Total Memory (MB)\n";
+
+    // Write each entry from the memoryUsageLog
+    for (const auto& entry : memoryUsageLog) {
+        file << std::get<0>(entry) << ","  // filename
+             << std::get<1>(entry) << ","  // Label
+             << std::get<2>(entry) << ","  // Used Memory (MB)
+             << std::get<3>(entry) << ","  // Free Memory (MB)
+             << std::get<4>(entry) << "\n";  // Total Memory (MB)
+    }
+
+    file.close();
+}
 
 
 void saveDescriptorAsCSVHeader(const std::vector<int>& descriptor, const std::string& filename, const std::string& label) {
@@ -32,12 +71,12 @@ void saveDescriptorAsCSVHeader(const std::vector<int>& descriptor, const std::st
             file << ",";
         }
     }
-    file << "," << "label" <<","<< "Exec Time" << "\n";
+    file << "," << "filename" << "," << "label" <<","<< "ExecTime" <<","<< "DimOfImage" << ","<<"ExecTimeMemLoading"<<"\n";
     file.close();
 }
 
 
-void saveDescriptorAsCSV(const std::vector<float>& descriptor, const std::string& filename, int label,  double executionTime) {
+void saveDescriptorAsCSV(const std::vector<double>& descriptor, const std::string& filename,const std::string& path, int label,  double executionTime,  double executionTimeMemory) {
     std::ofstream file(filename, std::ios::app);
     if (!file.is_open()) {
         std::cerr << "Error: Unable to open file " << filename << " for writing." << std::endl;
@@ -51,27 +90,18 @@ void saveDescriptorAsCSV(const std::vector<float>& descriptor, const std::string
             file << ",";
         }
     }
-    file << "," << label << "," << executionTime << "\n";
+    file << "," << path << "," << label << "," << executionTime <<","<< dimofimage_g <<","<< executionTimeMemory << "\n";
     file.close();
 }
 
-void computeGradients_seq(const cv::Mat& image, std::vector<float>& magnitude, std::vector<float>& orientation, std::vector<float>& histograms, int cellSize, int numBins) {
-    magnitude.clear();
-    orientation.clear();
-    histograms.clear();
-    std::cout << "Entering computeGradients" << std::endl;
+void computeGradients_seq(const cv::Mat& image, std::vector<float>& histograms, int cellSize, int numBins) {
 
     // Assuming image dimensions are reasonable for a grid of threads
     int width = image.cols;
     int height = image.rows;
     int numCellsX = width / cellSize;
     int numCellsY = height / cellSize;
-    histograms.resize(numCellsX * numCellsY * numBins, 0); // Initialize histogram vector
 
-    // Compute gradients, magnitude, and orientation
-    int countBin = 0;
-    int countHist = 0;
-    int countHistPos = 0;
     for (int idy = 0; idy < height; ++idy) {
         for (int idx = 0; idx < width; ++idx) {
             float G_x = 0, G_y = 0;
@@ -85,28 +115,40 @@ void computeGradients_seq(const cv::Mat& image, std::vector<float>& magnitude, s
             float mag = std::sqrt(G_x * G_x + G_y * G_y);
             float orient = std::atan2(G_y, G_x);
 
-            magnitude.push_back(mag);
-            orientation.push_back(orient);
-
             // Compute histogram bin for the current gradient
             int cellX = idx / cellSize;
             int cellY = idy / cellSize;
             int histIndex = cellY * numCellsX + cellX;
-                countHistPos++; // Ensure index is within bounds
-                float binWidth = M_PI / numBins;
-                int bin = std::floor((orient + M_PI) / binWidth);
-                if (bin == numBins) bin = 0; // Wrap around
-                histograms[histIndex * numBins + bin] += mag;
+            //float binWidth = M_PI / numBins;
+            //int bin = std::floor((orient + M_PI) / binWidth);
+            //if (bin == numBins) bin = 0; // Wrap around
+            //float binWidth = 2 * M_PI / numBins;
+            //int bin = static_cast<int>(std::round((orient + M_PI) / binWidth)) % numBins;
+
+            // Assuming numBins represents the number of bins for the [0, 180] degree range
+            float binWidth = M_PI / numBins;  // Bin width for [0, π] range
+
+            // Calculate the gradient orientation as an unsigned angle
+            if (orient < 0) {
+                orient += M_PI;  // Normalize to [0, π] range, example if we have -45°, we add 180° to get 135°
+            }
+            // Calculate the bin index
+            int bin = static_cast<int>(std::round(orient / binWidth)) % numBins;
+
+            int final_index = histIndex * numBins + bin;
+            if (final_index >= histograms.size()) {
+                std::cout << "Index out of bounds : " << final_index << std::endl;
+            }else{
+                histograms[final_index] += mag;
+            }
+
         }
     }
-    std::cerr << "------------Summary of errors-----------" << std::endl;
-    std::cerr << "Bin out of range: " << countBin << std::endl;
-    std::cerr << "Histogram out of range: " << countHist << std::endl;
-    std::cerr << "Histogram Pos: " << countHistPos << std::endl;
-    std::cout << "Ending computeGradients" << std::endl;
+
+    std::cout << "Ending computeGradients seq" << std::endl;
 }
 
-__global__ void computeGradients(unsigned char* image, float *d_magnitude, float *d_orientation, float *d_histograms, int width, int height, int cellSize,float binWidth, int numBins) {
+__global__ void computeGradients(unsigned char* image, float *d_histograms, int width, int height, int cellSize,float binWidth, int numBins, int histSize) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int idy = blockIdx.y * blockDim.y + threadIdx.y;
     int indexCurrent = idy * width + idx;
@@ -114,7 +156,7 @@ __global__ void computeGradients(unsigned char* image, float *d_magnitude, float
     if (idx >= width || idy >= height) return; // Boundary check
 
     float G_x = 0;
-    // Compute gradients in x and y directions. 
+    // Compute gradients in x and y directions.
     //The conditional statements check if the current pixel is within the image boundaries.
     //If the pixel is not on the left or right edge of the image, the gradient in the x-direction is computed by subtracting the pixel value on the left from the pixel value on the right.
     if (idx > 0 && idx < width - 1) {
@@ -132,18 +174,18 @@ __global__ void computeGradients(unsigned char* image, float *d_magnitude, float
     // Compute histogram bin for the current gradient
     int cellX = idx / cellSize;
     int cellY = idy / cellSize;
-    //The division (width / cellSize) calculates the ratio between the width of the grid and the size of each cell. 
-    //This ratio determines the number of cells that can fit horizontally in the grid. 
+    //The division (width / cellSize) calculates the ratio between the width of the grid and the size of each cell.
+    //This ratio determines the number of cells that can fit horizontally in the grid.
     //By multiplying this ratio with cellY, we obtain the number of cells that can fit vertically up to the Y-coordinate cellY.
-    //Finally, the expression cellY * (width / cellSize) + cellX adds the X-coordinate cellX to the previously calculated value. 
+    //Finally, the expression cellY * (width / cellSize) + cellX adds the X-coordinate cellX to the previously calculated value.
     //This addition determines the absolute position of a cell within the grid, considering both its X and Y coordinates.
     int histIndex = cellY * (width / cellSize) + cellX;
     // TODO: Parametrizzare perchè da fare una volta sola
     //The following formula calculates the bin index for the current orientation value:
-    /*1. `d_orientation[indexCurrent]`: This is a variable or an array element that holds the orientation value at the `indexCurrent` position. 
+    /*1. `d_orientation[indexCurrent]`: This is a variable or an array element that holds the orientation value at the `indexCurrent` position.
         The orientation value is likely in radians.
 
-    2. `M_PI`: This is a constant defined in the C++ math library that represents the value of pi (π). 
+    2. `M_PI`: This is a constant defined in the C++ math library that represents the value of pi (π).
         It is used to shift the orientation value by π radians.
 
     3. `(d_orientation[indexCurrent] + M_PI)`: This expression adds the orientation value to π, effectively shifting the range of values from [-π, π] to [0, 2π].
@@ -154,39 +196,34 @@ __global__ void computeGradients(unsigned char* image, float *d_magnitude, float
 
     6. `floor((d_orientation[indexCurrent] + M_PI) / binWidth)`: The `floor()` function is used to round down the floating-point bin index to the nearest integer. This ensures that the bin index is an integer value.
 
-    Overall, this code snippet calculates the bin index for a given orientation value by shifting the range of values, dividing by the bin width, and rounding down to the nearest integer. 
+    Overall, this code snippet calculates the bin index for a given orientation value by shifting the range of values, dividing by the bin width, and rounding down to the nearest integer.
     The bin index is commonly used in histogram calculations or other applications where values need to be grouped into bins or categories.
     */
-    int bin = floor((d_orientation_var + M_PI) / binWidth);
-    if (bin == numBins) bin = 0; // Wrap around
+    // Assuming numBins represents the number of bins for the [0, 180] degree range
+    // Calculate the gradient orientation as an unsigned angle
+    if (d_orientation_var < 0) {
+        d_orientation_var += M_PI;  // Normalize to [0, π] range, example if we have -45°, we add 180° to get 135°
+    }
+    // Calculate the bin index
+    int bin = __float2int_rn(d_orientation_var / binWidth) % numBins;
 
-    atomicAdd(&d_histograms[histIndex * numBins + bin], d_magnitude_var);
+    int final_index = histIndex * numBins + bin;
+    if (final_index >= histSize) {
+        printf("Index out of bounds: %d\n", final_index);
+    }else{
+      atomicAdd(&d_histograms[final_index], d_magnitude_var);
+    }
 }
 
-std::vector<float> computeDescriptorsCUDA(const cv::Mat& image, double& executionTime) {
+std::vector<double> computeDescriptorsCUDA(const cv::Mat& image, double& executionTime, double& LoadingInMemoryTime) {
+    int numCellsX = image.cols / cellSize_g;
+    int numCellsY = image.rows / cellSize_g;
+    cudaDeviceSynchronize();
+    logMemoryUsage("Before memory allocation");
+    auto startMemory = std::chrono::high_resolution_clock::now();
     unsigned char* d_image;
     size_t imageSize = image.total() * image.elemSize();
-    cudaMalloc(&d_image, imageSize);
-    cudaMemcpy(d_image, image.data, imageSize, cudaMemcpyHostToDevice);
-    size_t sizeInBytes = image.total() * sizeof(float);
-    float* d_magnitude;
-    // Allocate memory for magnitude
-    cudaError_t status = cudaMalloc((void **)&d_magnitude, sizeInBytes);
-    if (status != cudaSuccess) {
-        // Handle error (e.g., printing an error message and exiting)
-        fprintf(stderr, "cudaMalloc failed: %s\n", cudaGetErrorString(status));
-        exit(EXIT_FAILURE);
-    }
-    // Initialize d_magnitude to zero
-    status = cudaMemset(d_magnitude, 0, sizeInBytes);
-    if (status != cudaSuccess) {
-        // Handle error
-        fprintf(stderr, "cudaMemset failed: %s\n", cudaGetErrorString(status));
-        exit(EXIT_FAILURE);
-    }
-    //sizeInBytes = image.total() * sizeof(float);
-    float* d_orientation;
-    status = cudaMalloc((void **)&d_orientation, sizeInBytes);
+    cudaError_t status = cudaMalloc(&d_image, imageSize);
     // Allocate memory for orientation
     if (status != cudaSuccess) {
         // Handle error (e.g., printing an error message and exiting)
@@ -194,28 +231,15 @@ std::vector<float> computeDescriptorsCUDA(const cv::Mat& image, double& executio
         exit(EXIT_FAILURE);
     }
     // Initialize d_orientation to zero
-    status = cudaMemset(d_orientation, 0, sizeInBytes);
+    status = cudaMemcpy(d_image, image.data, imageSize, cudaMemcpyHostToDevice);
     if (status != cudaSuccess) {
         // Handle error
         fprintf(stderr, "cudaMemset failed: %s\n", cudaGetErrorString(status));
         exit(EXIT_FAILURE);
     }
-
-    // Assuming image dimensions are reasonable for a blocksize 16x16
-    //By dividing the image dimensions by the block size and rounding up to the nearest integer, the grid size is determined. 
-    //The -1 in the calculation is used to handle cases where the image dimensions are not evenly divisible by the block size. 
-    //This ensures that any remaining pixels are included in the grid.
-    dim3 blockSize(16, 16);
-    dim3 gridSize((image.cols + blockSize.x - 1) / blockSize.x,
-                  (image.rows + blockSize.y - 1) / blockSize.y);
-    //TODO: Print gridsize.x and gridsize.y;
-    
-    int numCellsX = image.cols / cellSize_g; 
-    int numCellsY = image.rows / cellSize_g;
-
     // hist size is the number of cells in the x and y direction times 9 bins per cell
     size_t histSize = numCellsX * numCellsY * numBins_g * sizeof(float); //TODO: Parametrizzare il num di bin
-    float* d_histograms; //device histograms 
+    float* d_histograms; //device histograms
     // Allocate memory for histograms
     status = cudaMalloc((void **)&d_histograms, histSize);
     if (status != cudaSuccess) {
@@ -230,53 +254,59 @@ std::vector<float> computeDescriptorsCUDA(const cv::Mat& image, double& executio
         fprintf(stderr, "cudaMemset failed: %s\n", cudaGetErrorString(status));
         exit(EXIT_FAILURE);
     }
+    auto endMemory = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsedMemory = endMemory - startMemory;
+    LoadingInMemoryTime = elapsedMemory.count();
+    cudaDeviceSynchronize();
+    logMemoryUsage("After allocating memory");
 
+    std::cout << "Loading Memory Time Step"<< LoadingInMemoryTime << std::endl;
+
+    // Assuming image dimensions are reasonable for a blocksize 16x16
+    //By dividing the image dimensions by the block size and rounding up to the nearest integer, the grid size is determined.
+    //The -1 in the calculation is used to handle cases where the image dimensions are not evenly divisible by the block size.
+    //This ensures that any remaining pixels are included in the grid.
+    dim3 blockSize(16, 16);
+    dim3 gridSize((image.cols + blockSize.x - 1) / blockSize.x,
+                  (image.rows + blockSize.y - 1) / blockSize.y);
+    //TODO: Print gridsize.x and gridsize.y;
+
+
+    // Bin width for [0, π] range
     float binWidth = M_PI / numBins_g;
+    int histSize_vec = numCellsX * numCellsY * numBins_g;
 
     auto start = std::chrono::high_resolution_clock::now();
     // Launch the kernel
-    computeGradients<<<gridSize, blockSize>>>(d_image, d_magnitude, d_orientation, d_histograms, image.cols, image.rows, cellSize_g, binWidth, numBins_g);
+    computeGradients<<<gridSize, blockSize>>>(d_image, d_histograms, image.cols, image.rows, cellSize_g, binWidth, numBins_g, histSize_vec);
     cudaDeviceSynchronize();
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end - start;
     executionTime = elapsed.count();
 
     // Transfer histogram data from device to host
+    auto startMemoryFromDevice = std::chrono::high_resolution_clock::now();
     float* h_histograms = new float[numCellsX * numCellsY * numBins_g];
-    cudaMemcpy(h_histograms, d_histograms, histSize, cudaMemcpyDeviceToHost);
-    // Normalization of histograms using the sum of squares with L2-norm per cell - TODO : modify and do it per block
-    for (int i = 0; i < numCellsX * numCellsY; ++i) {
-        float sum = 0.0f;
-        for (int j = 0; j < numBins_g; ++j) {
-            sum += h_histograms[i * numBins_g + j] * h_histograms[i * numBins_g + j];
-        }
-        sum = sqrtf(sum); // norm 2 ->  ||v||2 = sqrt(sum(x^2)) where x are the elements of vector v
-        for (int j = 0; j < numBins_g; ++j) {
-            h_histograms[i * numBins_g + j] /= sqrtf((sum*sum) + (1e-6*1e-6)); // Small constant added to avoid division by zero
-        }
+    status = cudaMemcpy(h_histograms, d_histograms, histSize, cudaMemcpyDeviceToHost);
+    if (status != cudaSuccess) {
+        // Handle error
+        fprintf(stderr, "cudaMemcpy failed: %s\n", cudaGetErrorString(status));
+        exit(EXIT_FAILURE);
     }
+    auto endMemoryFromDevice = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsedMemoryFromDevice = endMemoryFromDevice - startMemoryFromDevice;
+    LoadingInMemoryTime += elapsedMemoryFromDevice.count();
 
-    // Block Formation and Descriptor Computation
-    std::vector<float> descriptor;
-    for (int i = 0; i < numCellsY - 1; ++i) {
-        for (int j = 0; j < numCellsX - 1; ++j) {
-            // Concatenate histograms of four cells into a block
-            for (int y = i; y < i + 3; ++y) {
-                for (int x = j; x < j + 3; ++x) {
-                    for (int k = 0; k < numBins_g; ++k) {
-                        descriptor.push_back(h_histograms[(y * numCellsX + x) * numBins_g + k]);
-                    }
-                }
-            }
-        }
-    }
+    std::cout << "Loading Memory Time Final"<< LoadingInMemoryTime << std::endl;
+
+    // Normalization of histograms using the sum of squares with L2-norm per cell - TODO : modify and do it per block
 
     // Block Formation and Descriptor Computation with Block-Level Normalization
-    /*std::vector<float> descriptor;
-    for (int i = 0; i < numCellsY - 1; ++i) {
-        for (int j = 0; j < numCellsX - 1; ++j) {
+    std::vector<double> descriptor;
+    for (int i = 0; i <= numCellsY - blockSize_g; ++i) {
+        for (int j = 0; j <= numCellsX - blockSize_g; ++j) {
             // Step 1: Calculate the L2-norm for the block
-            float blockNorm = 0.0f;
+            double blockNorm = 0;
             for (int y = i; y < i + blockSize_g; ++y) {
                 for (int x = j; x < j + blockSize_g; ++x) {
                     for (int k = 0; k < numBins_g; ++k) {
@@ -291,83 +321,89 @@ std::vector<float> computeDescriptorsCUDA(const cv::Mat& image, double& executio
             for (int y = i; y < i + blockSize_g; ++y) {
                 for (int x = j; x < j + blockSize_g; ++x) {
                     for (int k = 0; k < numBins_g; ++k) {
-                        float normalizedValue = h_histograms[(y * numCellsX + x) * numBins_g + k] / blockNorm;
+                        double normalizedValue = h_histograms[(y * numCellsX + x) * numBins_g + k] / blockNorm;
                         descriptor.push_back(normalizedValue);
                     }
                 }
             }
         }
-    }*/
+    }
 
     cudaFree(d_image);
-    cudaFree(d_magnitude);
-    cudaFree(d_orientation);
     delete[] h_histograms;
     cudaFree(d_histograms);
+    cudaDeviceSynchronize();
+    logMemoryUsage("After freeing all memory");
+
 
     return descriptor;
 }
 
-std::vector<float> computeDescriptorsSeq(const cv::Mat& image, double& executionTime) {
-    
-    int cellSize = 64;
-    int numCellsX = image.cols / cellSize;
-    int numCellsY = image.rows / cellSize;
+std::vector<double> computeDescriptorsSeq(const cv::Mat& image, double& executionTime) {
 
-    std::vector<float> magnitude, orientation;
+    int numCellsX = image.cols / cellSize_g;
+    int numCellsY = image.rows / cellSize_g;
+
     // Allocate memory for histograms
-    std::vector<float> histograms(numCellsX * numCellsY * 9, 0.0f);
+    std::vector<float> histograms(numCellsX * numCellsY * numBins_g, 0.0f);
     auto start = std::chrono::high_resolution_clock::now();
-    computeGradients_seq(image, magnitude, orientation, histograms, cellSize, 9);
+    computeGradients_seq(image, histograms, cellSize_g, numBins_g);
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end - start;
     executionTime = elapsed.count();
 
-    // Normalization of histograms using the sum of squares
-    for (int i = 0; i < numCellsX * numCellsY; ++i) {
-        float sum = 0.0f;
-        for (int j = 0; j < 9; ++j) {
-            sum += histograms[i * 9 + j] * histograms[i * 9 + j];
-        }
-        sum = sqrtf(sum);
-        for (int j = 0; j < 9; ++j) {
-            histograms[i * 9 + j] /= (sum + 1e-6); // Small constant added to avoid division by zero
-        }
-    }
+    std::cout << "Before computing descriptor seq" << std::endl;
 
-    // Block Formation and Descriptor Computation
-    std::vector<float> descriptor;
-    for (int i = 0; i < numCellsY - 1; ++i) {
-        for (int j = 0; j < numCellsX - 1; ++j) {
-            // Concatenate histograms of four cells into a block
-            for (int y = i; y < i + 2; ++y) {
-                for (int x = j; x < j + 2; ++x) {
-                    for (int k = 0; k < 9; ++k) {
-                        descriptor.push_back(histograms[(y * numCellsX + x) * 9 + k]);
+    // Block Formation and Descriptor Computation with Block-Level Normalization
+    std::vector<double> descriptor;
+    for (int i = 0; i <= numCellsY - blockSize_g; ++i) {
+        for (int j = 0; j <= numCellsX - blockSize_g; ++j) {
+            // Step 1: Calculate the L2-norm for the block
+            double blockNorm = 0;
+            for (int y = i; y < i + blockSize_g; ++y) {
+                for (int x = j; x < j + blockSize_g; ++x) {
+                    for (int k = 0; k < numBins_g; ++k) {
+                        float histValue = histograms[(y * numCellsX + x) * numBins_g + k];
+                        blockNorm += histValue * histValue;
+                    }
+                }
+            }
+
+            blockNorm = sqrtf((blockNorm*blockNorm) + 1e-6 * 1e-6); // Small constant to avoid division by zero
+            // Step 2: Normalize the histograms within the block
+            for (int y = i; y < i + blockSize_g; ++y) {
+                for (int x = j; x < j + blockSize_g; ++x) {
+                    for (int k = 0; k < numBins_g; ++k) {
+                        double normalizedValue = histograms[(y * numCellsX + x) * numBins_g + k] / blockNorm;
+                        descriptor.push_back(normalizedValue);
                     }
                 }
             }
         }
     }
 
+    std::cout << "Ending computing descriptor seq" << std::endl;
+
+
     return descriptor;
 }
 
-std::vector<float> computeDescriptors(const std::string& image_path, double& executionTime, bool cudaAccelerated = true) {
+std::vector<double> computeDescriptors(const std::string& image_path, double& executionTime, double& LoadingInMemoryTime, bool cudaAccelerated = true) {
     // Load an image using OpenCV
     cv::Mat imageBeforeResize = cv::imread(image_path, cv::IMREAD_GRAYSCALE);
     cv::Mat image;
     cv::resize(imageBeforeResize, image, cv::Size(dimofimage_g, dimofimage_g)); // Resize to standard size -- TODO: Refactor
     if(image.empty()) {
         std::cerr << "Failed to load image." << std::endl;
-        return std::vector<float>();
+        return std::vector<double>();
     }
-    std::vector<float> descriptor;
+    std::vector<double> descriptor;
     if(cudaAccelerated) {
-        descriptor = computeDescriptorsCUDA(image, executionTime);
+        descriptor = computeDescriptorsCUDA(image, executionTime, LoadingInMemoryTime);
     } else {
         descriptor = computeDescriptorsSeq(image, executionTime);
     }
+    std::cout << "End COMPUTE DESCRIPTOR ----------" << std::endl;
 
     return descriptor;
 }
@@ -388,20 +424,20 @@ int main(int argc, char** argv) {
     int numCellsX = dimofimage_g / cellSize_g;
     int numCellsY = dimofimage_g / cellSize_g;
     /*This is how we calculate the descriptorSizeDimension:
-    
-    1. `(numCellsY - blockSize + 1)` calculates the number of blocks in the Y direction. 
+
+    1. `(numCellsY - blockSize + 1)` calculates the number of blocks in the Y direction.
         Here, `numCellsY` represents the total number of cells in the Y direction, and `blockSize` represents the size of each block.
         By subtracting `blockSize - 1` from `numCellsY`, we account for the overlapping blocks.
-        
-    2. `(numCellsX - blockSize + 1)` calculates the number of blocks in the X direction. 
-        Similar to the previous step, `numCellsX` represents the total number of cells in the X direction, and `blockSize` represents the size of each block. 
+
+    2. `(numCellsX - blockSize + 1)` calculates the number of blocks in the X direction.
+        Similar to the previous step, `numCellsX` represents the total number of cells in the X direction, and `blockSize` represents the size of each block.
         Again, we subtract `blockSize - 1` to account for the overlapping blocks.
-        
-    3. `blockSize * blockSize` calculates the number of cells within each block. 
+
+    3. `blockSize * blockSize` calculates the number of cells within each block.
         Since the blocks are square, we multiply the `blockSize` by itself to get the total number of cells in a block.
-        
+
     4. `numBins` represents the number of bins used for the descriptor. Each cell in the histogram contains `numBins` values.
-        By multiplying all these values together, we get the total size of the descriptor. 
+        By multiplying all these values together, we get the total size of the descriptor.
         The descriptor size is the product of the number of blocks in the X and Y directions, the number of cells within each block, and the number of bins.
     */
     descriptorSizeDimension_g = (numCellsY - blockSize_g + 1) * (numCellsX - blockSize_g + 1) * blockSize_g * blockSize_g * numBins_g;
@@ -411,6 +447,7 @@ int main(int argc, char** argv) {
     for (int i=1; i <= descriptorSizeDimension_g; ++i){
       header.push_back(i);
     }
+    std::cout << "Descriptor size : " << descriptorSizeDimension_g << std::endl;
     std::string seq_file = outputFile+"_seq.csv";
     std::string cuda_file = outputFile+"_cuda.csv";
     std::cout << seq_file << std::endl;
@@ -425,20 +462,25 @@ int main(int argc, char** argv) {
 
         double executionTimeCuda = 0.0;
         double executionTimeSeq = 0.0;
-        std::vector<float> descriptor = computeDescriptors(file_path, executionTimeCuda);
-        //std::vector<float> descriptor_seq = computeDescriptors(file_path, executionTimeSeq, false);
-        if (descriptor.empty()){ //|| descriptor_seq.empty()) {
+        double loadingTimeInMemoryCuda = 0.0;
+        double loadingTimeInMemorySeq = 0.0;
+        std::vector<double> descriptor = computeDescriptors(file_path, executionTimeCuda, loadingTimeInMemoryCuda);
+        std::vector<double> descriptor_seq = computeDescriptors(file_path, executionTimeSeq, loadingTimeInMemorySeq, false);
+        //std::vector<double> descriptor_seq;
+        current_filename_g = file_path;
+        if (descriptor_seq.empty()) {
             std::cout << "Vector is empty" << std::endl;
         } else {
             int label = 1;
-            std::cout << descriptor.size() << std::endl;
+            std::cout << descriptor_seq.size() << std::endl;
             std::cout << descriptor[0] << std::endl;
-            saveDescriptorAsCSV(descriptor, cuda_file, label, executionTimeCuda);
-            //saveDescriptorAsCSV(descriptor_seq, seq_file, label, executionTimeSeq);
-            descriptor.clear(); // Clear the vector
-            //descriptor_seq.clear();
-            break;
+            std::cout << descriptor_seq[0] << std::endl;
+            saveDescriptorAsCSV(descriptor, cuda_file, file_path, label, executionTimeCuda, loadingTimeInMemoryCuda);
+            saveDescriptorAsCSV(descriptor_seq, seq_file, file_path, label, executionTimeSeq, loadingTimeInMemorySeq);
         }
+        descriptor.clear(); // Clear the vector
+        descriptor_seq.clear();
+        //break;
     }
 
       //Iterate on images where a human is NOT present
@@ -449,20 +491,25 @@ int main(int argc, char** argv) {
 
         double executionTimeCuda = 0.0;
         double executionTimeSeq = 0.0;
-        std::vector<float> descriptor = computeDescriptors(file_path, executionTimeCuda);
-        //std::vector<float> descriptor_seq = computeDescriptors(file_path, executionTimeSeq, false);
-        if (descriptor.empty()){ //|| descriptor_seq.empty()) {
+        double loadingTimeInMemoryCuda = 0.0;
+        double loadingTimeInMemorySeq = 0.0;
+        std::vector<double> descriptor = computeDescriptors(file_path, executionTimeCuda, loadingTimeInMemoryCuda);
+        std::vector<double> descriptor_seq = computeDescriptors(file_path, executionTimeSeq, loadingTimeInMemorySeq, false);        //std::vector<double> descriptor_seq;
+        current_filename_g = file_path;
+        if (descriptor_seq.empty()) {
             std::cout << "Vector is empty" << std::endl;
         } else {
             int label = 0;
-            saveDescriptorAsCSV(descriptor, cuda_file, label, executionTimeCuda);
-            //saveDescriptorAsCSV(descriptor_seq, seq_file, label, executionTimeSeq);
-            descriptor.clear(); // Clear the vector
-            //descriptor_seq.clear();
-            break;
+            std::cout << descriptor_seq.size() << std::endl;
+            saveDescriptorAsCSV(descriptor, cuda_file, file_path, label, executionTimeCuda, loadingTimeInMemoryCuda);
+            saveDescriptorAsCSV(descriptor_seq, seq_file, file_path, label, executionTimeSeq, loadingTimeInMemorySeq);
         }
+        descriptor.clear(); // Clear the vector
+        descriptor_seq.clear();
+        //break;
     }
 
+    saveMemoryUsageLogToCSV(outputFile+"_memory_usage_cuda_log.csv");
 
     return 0;
 }
