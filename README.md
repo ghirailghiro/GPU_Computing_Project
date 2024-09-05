@@ -15,4 +15,9 @@ The dataset used for this project is the Kaggle dataset **[Human Detection Datas
 ### Google Colab
 The entire project, including both sequential and CUDA implementations, is executed in Google Colab. You can run the code in the provided notebook named **`Gradient_Computation.ipynb`**.
 
+### Contributors
+This project was developed by:
+- **Celeste Nicora**
+- **Michele Ghiradelli**
+
 Feel free to explore the code, run experiments, and contribute to further optimizations!
