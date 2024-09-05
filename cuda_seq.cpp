@@ -1,3 +1,4 @@
+%%writefile gradient_computation.cu
 #include <opencv2/opencv.hpp>
 #include <fstream>
 #include <sstream>
@@ -119,11 +120,6 @@ void computeGradients_seq(const cv::Mat& image, std::vector<float>& histograms, 
             int cellX = idx / cellSize;
             int cellY = idy / cellSize;
             int histIndex = cellY * numCellsX + cellX;
-            //float binWidth = M_PI / numBins;
-            //int bin = std::floor((orient + M_PI) / binWidth);
-            //if (bin == numBins) bin = 0; // Wrap around
-            //float binWidth = 2 * M_PI / numBins;
-            //int bin = static_cast<int>(std::round((orient + M_PI) / binWidth)) % numBins;
 
             // Assuming numBins represents the number of bins for the [0, 180] degree range
             float binWidth = M_PI / numBins;  // Bin width for [0, π] range
@@ -180,7 +176,7 @@ __global__ void computeGradients(unsigned char* image, float *d_histograms, int 
     //Finally, the expression cellY * (width / cellSize) + cellX adds the X-coordinate cellX to the previously calculated value.
     //This addition determines the absolute position of a cell within the grid, considering both its X and Y coordinates.
     int histIndex = cellY * (width / cellSize) + cellX;
-    // TODO: Parametrizzare perchè da fare una volta sola
+
     //The following formula calculates the bin index for the current orientation value:
     /*1. `d_orientation[indexCurrent]`: This is a variable or an array element that holds the orientation value at the `indexCurrent` position.
         The orientation value is likely in radians.
@@ -196,10 +192,7 @@ __global__ void computeGradients(unsigned char* image, float *d_histograms, int 
 
     6. `floor((d_orientation[indexCurrent] + M_PI) / binWidth)`: The `floor()` function is used to round down the floating-point bin index to the nearest integer. This ensures that the bin index is an integer value.
 
-    Overall, this code snippet calculates the bin index for a given orientation value by shifting the range of values, dividing by the bin width, and rounding down to the nearest integer.
-    The bin index is commonly used in histogram calculations or other applications where values need to be grouped into bins or categories.
     */
-    // Assuming numBins represents the number of bins for the [0, 180] degree range
     // Calculate the gradient orientation as an unsigned angle
     if (d_orientation_var < 0) {
         d_orientation_var += M_PI;  // Normalize to [0, π] range, example if we have -45°, we add 180° to get 135°
@@ -238,7 +231,7 @@ std::vector<double> computeDescriptorsCUDA(const cv::Mat& image, double& executi
         exit(EXIT_FAILURE);
     }
     // hist size is the number of cells in the x and y direction times 9 bins per cell
-    size_t histSize = numCellsX * numCellsY * numBins_g * sizeof(float); //TODO: Parametrizzare il num di bin
+    size_t histSize = numCellsX * numCellsY * numBins_g * sizeof(float);
     float* d_histograms; //device histograms
     // Allocate memory for histograms
     status = cudaMalloc((void **)&d_histograms, histSize);
@@ -269,8 +262,6 @@ std::vector<double> computeDescriptorsCUDA(const cv::Mat& image, double& executi
     dim3 blockSize(16, 16);
     dim3 gridSize((image.cols + blockSize.x - 1) / blockSize.x,
                   (image.rows + blockSize.y - 1) / blockSize.y);
-    //TODO: Print gridsize.x and gridsize.y;
-
 
     // Bin width for [0, π] range
     float binWidth = M_PI / numBins_g;
@@ -298,8 +289,6 @@ std::vector<double> computeDescriptorsCUDA(const cv::Mat& image, double& executi
     LoadingInMemoryTime += elapsedMemoryFromDevice.count();
 
     std::cout << "Loading Memory Time Final"<< LoadingInMemoryTime << std::endl;
-
-    // Normalization of histograms using the sum of squares with L2-norm per cell - TODO : modify and do it per block
 
     // Block Formation and Descriptor Computation with Block-Level Normalization
     std::vector<double> descriptor;
@@ -389,10 +378,10 @@ std::vector<double> computeDescriptorsSeq(const cv::Mat& image, double& executio
 }
 
 std::vector<double> computeDescriptors(const std::string& image_path, double& executionTime, double& LoadingInMemoryTime, bool cudaAccelerated = true) {
-    // Load an image using OpenCV
+
     cv::Mat imageBeforeResize = cv::imread(image_path, cv::IMREAD_GRAYSCALE);
     cv::Mat image;
-    cv::resize(imageBeforeResize, image, cv::Size(dimofimage_g, dimofimage_g)); // Resize to standard size -- TODO: Refactor
+    cv::resize(imageBeforeResize, image, cv::Size(dimofimage_g, dimofimage_g));
     if(image.empty()) {
         std::cerr << "Failed to load image." << std::endl;
         return std::vector<double>();
@@ -466,7 +455,7 @@ int main(int argc, char** argv) {
         double loadingTimeInMemorySeq = 0.0;
         std::vector<double> descriptor = computeDescriptors(file_path, executionTimeCuda, loadingTimeInMemoryCuda);
         std::vector<double> descriptor_seq = computeDescriptors(file_path, executionTimeSeq, loadingTimeInMemorySeq, false);
-        //std::vector<double> descriptor_seq;
+
         current_filename_g = file_path;
         if (descriptor_seq.empty()) {
             std::cout << "Vector is empty" << std::endl;
@@ -478,9 +467,8 @@ int main(int argc, char** argv) {
             saveDescriptorAsCSV(descriptor, cuda_file, file_path, label, executionTimeCuda, loadingTimeInMemoryCuda);
             saveDescriptorAsCSV(descriptor_seq, seq_file, file_path, label, executionTimeSeq, loadingTimeInMemorySeq);
         }
-        descriptor.clear(); // Clear the vector
+        descriptor.clear();
         descriptor_seq.clear();
-        //break;
     }
 
       //Iterate on images where a human is NOT present
@@ -504,9 +492,8 @@ int main(int argc, char** argv) {
             saveDescriptorAsCSV(descriptor, cuda_file, file_path, label, executionTimeCuda, loadingTimeInMemoryCuda);
             saveDescriptorAsCSV(descriptor_seq, seq_file, file_path, label, executionTimeSeq, loadingTimeInMemorySeq);
         }
-        descriptor.clear(); // Clear the vector
+        descriptor.clear();
         descriptor_seq.clear();
-        //break;
     }
 
     saveMemoryUsageLogToCSV(outputFile+"_memory_usage_cuda_log.csv");
