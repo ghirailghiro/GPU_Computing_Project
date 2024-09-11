@@ -12,11 +12,11 @@ The main objectives of this project include:
 ### Dataset
 The dataset used for this project is the Kaggle dataset **[Human Detection Dataset](https://www.kaggle.com/datasets/constantinwerner/human-detection-dataset?resource=download)**, which contains a series of images with and without human figures, used for testing and evaluating human detection algorithms.
 
-### Google Colab
-The entire project, including both sequential and CUDA implementations, is executed in Google Colab. You can find the code in the provided notebook named **`Gradient_Computation.ipynb`**.
+### Google Colab and Personal Computer
+The entire project, including both sequential and CUDA implementations, is executed in Google Colab and a Personal PC.
 
-### C++ Implementation
-Just the C++ code for both the sequential and CUDA implementations can be found in the file **`cuda_seq.cpp`**. This file has been created to run the project on a personal machine and it contains the detailed logic used to compute HOG descriptors.
+### CUDA Implementation
+The CUDA code for both the sequential and CUDA implementations can be found in the file **`gradient_computation.cu`** (for PC execution) and the notebook **`Gradient_Computation.ipynb`** (for colab execution). This file has been created to run the project on a personal machine and it contains the detailed logic used to compute HOG descriptors.
 
 ### Running Experiments
 
