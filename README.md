@@ -16,7 +16,7 @@ The dataset used for this project is the Kaggle dataset **[Human Detection Datas
 The entire project, including both sequential and CUDA implementations, is executed in Google Colab and a Personal PC.
 
 ### CUDA Implementation
-The CUDA code for both the sequential and CUDA implementations can be found in the file **`gradient_computation.cu`** (for PC execution) and the notebook **`Gradient_Computation.ipynb`** (for colab execution). This file has been created to run the project on a personal machine and it contains the detailed logic used to compute HOG descriptors.
+The code for both the sequential and CUDA implementations can be found in the file **`gradient_computation.cu`** (for PC execution) and the notebook **`Gradient_Computation.ipynb`** or **`colab_code.cu`**(for colab execution). This file has been created to run the project on a personal machine and it contains the detailed logic used to compute HOG descriptors.
 
 ### Running Experiments
 
